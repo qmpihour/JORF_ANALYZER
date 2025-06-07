@@ -1,37 +1,63 @@
 from flask import Flask, render_template_string
-import spacy.cli
-spacy.cli.download("fr_core_news_md")
 import spacy
 import re
 import os
+import requests
+import fitz  # PyMuPDF
+import datetime
 
-# Initialisation de l'app Flask
+# --- Initialisation Flask ---
 app = Flask(__name__)
 
-# Chargement du modèle spaCy
-nlp = spacy.load("fr_core_news_md")
+# --- Télécharger le modèle spaCy si besoin ---
+import spacy.cli
+spacy.cli.download("fr_core_news_md")
 
-# Lecture du texte du JO (remplace ce fichier par un autre si besoin)
-with open("journal_officiel_sample.txt", "r", encoding="utf-8") as f:
-    jo_text = f.read()
+# --- Fonction pour télécharger le JORF du jour ---
+def download_jorf_pdf():
+    today = datetime.date.today()
+    date_str = today.strftime("%Y%m%d")
+    url = f"https://www.legifrance.gouv.fr/download/pdf/jorf/jorf_{date_str}.pdf"
+    response = requests.get(url)
+    if response.status_code == 200:
+        with open("jorf_du_jour.pdf", "wb") as f:
+            f.write(response.content)
+        print("✅ JORF téléchargé :", url)
+        return True
+    else:
+        print("❌ Échec du téléchargement :", response.status_code)
+        return False
 
-# Analyse NLP
-doc = nlp(jo_text)
+# --- Fonction pour extraire le texte du PDF ---
+def extract_text_from_pdf(pdf_path):
+    doc = fitz.open(pdf_path)
+    text = ""
+    for page in doc:
+        text += page.get_text()
+    doc.close()
+    return text
 
-# Extraction des personnalités
-personnalites = sorted(set(ent.text for ent in doc.ents if ent.label_ == "PER"))
+# --- Fonction pour analyser le texte ---
+def analyse_texte(texte):
+    nlp = spacy.load("fr_core_news_md")
+    doc = nlp(texte)
 
-# Détection des thèmes (exemple de liste modifiable)
-themes = ["agriculture", "numérique", "cybersécurité", "défense", "armée", "étranger", "coopération internationale"]
-themes_trouves = sorted({theme for theme in themes if re.search(rf"\b{theme}\b", jo_text, re.IGNORECASE)})
+    # Personnalités
+    personnalites = sorted(set(ent.text for ent in doc.ents if ent.label_ == "PER"))
 
-# Détection des nominations
-nominations = []
-for line in jo_text.split("\n"):
-    if re.search(r"nommée?|désignée?|relevée? de ses fonctions", line, re.IGNORECASE):
-        nominations.append(line.strip())
+    # Thématiques
+    themes = ["agriculture", "numérique", "cybersécurité", "défense", "armée", "étranger", "coopération internationale"]
+    themes_trouves = sorted({theme for theme in themes if re.search(rf"\b{theme}\b", texte, re.IGNORECASE)})
 
-# Mini template HTML épuré
+    # Nominations
+    nominations = []
+    for line in texte.split("\n"):
+        if re.search(r"nommée?|désignée?|relevée? de ses fonctions", line, re.IGNORECASE):
+            nominations.append(line.strip())
+
+    return personnalites, themes_trouves, nominations
+
+# --- Mini template HTML ---
 HTML_TEMPLATE = """
 <!doctype html>
 <html lang="fr">
@@ -70,9 +96,20 @@ HTML_TEMPLATE = """
 </html>
 """
 
+# --- Route principale ---
 @app.route("/")
 def index():
-    return render_template_string(HTML_TEMPLATE, personnalites=personnalites, nominations=nominations, themes=themes_trouves)
+    if download_jorf_pdf():
+        texte_jorf = extract_text_from_pdf("jorf_du_jour.pdf")
+    else:
+        texte_jorf = "Aucun JORF disponible aujourd'hui."
+
+    personnalites, themes_trouves, nominations = analyse_texte(texte_jorf)
+
+    return render_template_string(HTML_TEMPLATE,
+                                  personnalites=personnalites,
+                                  nominations=nominations,
+                                  themes=themes_trouves)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
