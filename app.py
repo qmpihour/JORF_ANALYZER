@@ -1,4 +1,6 @@
 from flask import Flask, render_template_string
+import spacy.cli
+spacy.cli.download("fr_core_news_md")
 import spacy
 import re
 import os
