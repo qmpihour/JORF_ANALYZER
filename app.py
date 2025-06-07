@@ -5,6 +5,8 @@ import os
 import requests
 import fitz  # PyMuPDF
 import datetime
+from PIL import Image
+import pytesseract
 
 # --- Initialisation Flask ---
 app = Flask(__name__)
@@ -28,7 +30,7 @@ def download_jorf_pdf():
         print("❌ Échec du téléchargement :", response.status_code)
         return False
 
-# --- Fonction pour extraire le texte du PDF ---
+# --- Extraction du texte classique ---
 def extract_text_from_pdf(pdf_path):
     doc = fitz.open(pdf_path)
     text = ""
@@ -37,23 +39,29 @@ def extract_text_from_pdf(pdf_path):
     doc.close()
     return text
 
-# --- Fonction pour analyser le texte ---
+# --- OCR fallback si texte vide ---
+def ocr_pdf(pdf_path):
+    doc = fitz.open(pdf_path)
+    text = ""
+    for i, page in enumerate(doc):
+        pix = page.get_pixmap(dpi=300)  # haute résolution
+        img_path = f"page_{i}.png"
+        pix.save(img_path)
+        img = Image.open(img_path)
+        text += pytesseract.image_to_string(img, lang="fra")  # lang=fra pour le français
+        os.remove(img_path)
+    doc.close()
+    return text
+
+# --- Fonction d'analyse NLP ---
 def analyse_texte(texte):
     nlp = spacy.load("fr_core_news_md")
     doc = nlp(texte)
 
-    # Personnalités
     personnalites = sorted(set(ent.text for ent in doc.ents if ent.label_ == "PER"))
-
-    # Thématiques
     themes = ["agriculture", "numérique", "cybersécurité", "défense", "armée", "étranger", "coopération internationale"]
     themes_trouves = sorted({theme for theme in themes if re.search(rf"\b{theme}\b", texte, re.IGNORECASE)})
-
-    # Nominations
-    nominations = []
-    for line in texte.split("\n"):
-        if re.search(r"nommée?|désignée?|relevée? de ses fonctions", line, re.IGNORECASE):
-            nominations.append(line.strip())
+    nominations = [line.strip() for line in texte.split("\n") if re.search(r"nommée?|désignée?|relevée? de ses fonctions", line, re.IGNORECASE)]
 
     return personnalites, themes_trouves, nominations
 
@@ -96,11 +104,15 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# --- Route principale ---
 @app.route("/")
 def index():
     if download_jorf_pdf():
         texte_jorf = extract_text_from_pdf("jorf_du_jour.pdf")
+        if not texte_jorf.strip():
+            print("⚠️ Texte vide, fallback OCR…")
+            texte_jorf = ocr_pdf("jorf_du_jour.pdf")
+        else:
+            print("✅ Texte extrait sans OCR.")
     else:
         texte_jorf = "Aucun JORF disponible aujourd'hui."
 
