@@ -1,3 +1,5 @@
 Flask
 spacy
 PyMuPDF
+pytesseract
+Pillow
