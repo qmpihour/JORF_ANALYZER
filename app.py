@@ -17,7 +17,7 @@ spacy.cli.download("fr_core_news_md")
 
 # --- Fonction pour télécharger le JORF du jour ---
 def download_jorf_pdf():
-    today = datetime.date.today()
+    today = datetime.date.today() - datetime.timedelta(days=1)
     date_str = today.strftime("%Y%m%d")
     url = f"https://www.legifrance.gouv.fr/download/pdf/jorf/jorf_{date_str}.pdf"
     response = requests.get(url)
