@@ -3,3 +3,5 @@ spacy
 PyMuPDF
 pytesseract
 Pillow
+feedparser
+beautifulsoup4
