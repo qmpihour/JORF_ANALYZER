@@ -1,29 +1,21 @@
-from flask import Flask, render_template_string, request, redirect, url_for
+from flask import Flask, render_template_string, request, redirect
 import spacy
 import re
 import os
 import requests
+import feedparser
+from bs4 import BeautifulSoup
 import fitz  # PyMuPDF
 from PIL import Image
 import pytesseract
 
-# --- Initialisation Flask ---
 app = Flask(__name__)
 
 # --- Télécharger le modèle spaCy si besoin ---
 import spacy.cli
 spacy.cli.download("fr_core_news_md")
 
-# --- Extraction classique du texte ---
-def extract_text_from_pdf(pdf_path):
-    doc = fitz.open(pdf_path)
-    text = ""
-    for page in doc:
-        text += page.get_text()
-    doc.close()
-    return text
-
-# --- OCR fallback si texte vide ---
+# --- OCR fallback ---
 def ocr_pdf(pdf_path):
     doc = fitz.open(pdf_path)
     text = ""
@@ -34,6 +26,15 @@ def ocr_pdf(pdf_path):
         img = Image.open(img_path)
         text += pytesseract.image_to_string(img, lang="fra")
         os.remove(img_path)
+    doc.close()
+    return text
+
+# --- Extraction classique ---
+def extract_text_from_pdf(pdf_path):
+    doc = fitz.open(pdf_path)
+    text = ""
+    for page in doc:
+        text += page.get_text()
     doc.close()
     return text
 
@@ -49,7 +50,45 @@ def analyse_texte(texte):
 
     return personnalites, themes_trouves, nominations
 
-# --- Template HTML ---
+# --- Fonction pour télécharger le PDF du jour via le flux RSS ---
+def download_latest_jorf_pdf():
+    RSS_URL = "https://www.legifrance.gouv.fr/rss/jorf.xml"
+    feed = feedparser.parse(RSS_URL)
+    latest_entry = feed.entries[0]
+
+    print("🔎 Récupération de la page HTML :", latest_entry.link)
+    response = requests.get(latest_entry.link)
+    if response.status_code == 200:
+        soup = BeautifulSoup(response.content, "html.parser")
+        pdf_link = None
+
+        for a_tag in soup.find_all("a", href=True):
+            if a_tag["href"].endswith(".pdf"):
+                pdf_link = a_tag["href"]
+                break
+
+        if pdf_link:
+            if not pdf_link.startswith("http"):
+                pdf_link = "https://www.legifrance.gouv.fr" + pdf_link
+            print("✅ Lien PDF trouvé :", pdf_link)
+
+            pdf_response = requests.get(pdf_link)
+            if pdf_response.status_code == 200:
+                with open("jorf_du_jour.pdf", "wb") as f:
+                    f.write(pdf_response.content)
+                print("✅ PDF téléchargé.")
+                return True
+            else:
+                print("❌ Échec téléchargement PDF :", pdf_response.status_code)
+                return False
+        else:
+            print("❌ Aucun lien PDF trouvé.")
+            return False
+    else:
+        print("❌ Échec de la récupération HTML :", response.status_code)
+        return False
+
+# --- Mini template HTML ---
 HTML_TEMPLATE = """
 <!doctype html>
 <html lang="fr">
@@ -68,9 +107,7 @@ HTML_TEMPLATE = """
   <body>
     <h1>📰 Dashboard Journal Officiel</h1>
     <form method="POST" action="/analyse">
-      <label for="url">Lien du PDF :</label>
-      <input type="text" id="url" name="url" size="80" required>
-      <button type="submit">Analyser</button>
+      <button type="submit">Analyser le JO du jour</button>
     </form>
 
     {% if analysed %}
@@ -99,29 +136,20 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# --- Route principale ---
 @app.route("/", methods=["GET"])
 def index():
     return render_template_string(HTML_TEMPLATE, analysed=False)
 
-# --- Route pour analyser un PDF ---
 @app.route("/analyse", methods=["POST"])
 def analyse():
-    url = request.form["url"]
-    response = requests.get(url)
-    if response.status_code == 200:
-        with open("jorf_temp.pdf", "wb") as f:
-            f.write(response.content)
-        print("✅ PDF téléchargé depuis :", url)
-
-        texte = extract_text_from_pdf("jorf_temp.pdf")
-        if not texte.strip():
+    if download_latest_jorf_pdf():
+        texte_jorf = extract_text_from_pdf("jorf_du_jour.pdf")
+        if not texte_jorf.strip():
             print("⚠️ Texte vide, fallback OCR…")
-            texte = ocr_pdf("jorf_temp.pdf")
+            texte_jorf = ocr_pdf("jorf_du_jour.pdf")
         else:
             print("✅ Texte extrait sans OCR.")
-
-        personnalites, themes_trouves, nominations = analyse_texte(texte)
+        personnalites, themes_trouves, nominations = analyse_texte(texte_jorf)
     else:
         personnalites, themes_trouves, nominations = [], [], []
 
