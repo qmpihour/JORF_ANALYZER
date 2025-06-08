@@ -1,21 +1,19 @@
-from flask import Flask, render_template_string, request, redirect
+from flask import Flask, render_template_string, request
 import spacy
 import re
 import os
-import requests
-import feedparser
-from bs4 import BeautifulSoup
 import fitz  # PyMuPDF
 from PIL import Image
 import pytesseract
 
+# Initialisation Flask
 app = Flask(__name__)
 
-# --- Télécharger le modèle spaCy si besoin ---
+# Télécharger le modèle spaCy si besoin
 import spacy.cli
 spacy.cli.download("fr_core_news_md")
 
-# --- OCR fallback ---
+# OCR fallback pour les PDF scannés
 def ocr_pdf(pdf_path):
     doc = fitz.open(pdf_path)
     text = ""
@@ -29,7 +27,7 @@ def ocr_pdf(pdf_path):
     doc.close()
     return text
 
-# --- Extraction classique ---
+# Extraction de texte classique
 def extract_text_from_pdf(pdf_path):
     doc = fitz.open(pdf_path)
     text = ""
@@ -38,7 +36,7 @@ def extract_text_from_pdf(pdf_path):
     doc.close()
     return text
 
-# --- Analyse NLP ---
+# Analyse du texte avec spaCy
 def analyse_texte(texte):
     nlp = spacy.load("fr_core_news_md")
     doc = nlp(texte)
@@ -50,51 +48,13 @@ def analyse_texte(texte):
 
     return personnalites, themes_trouves, nominations
 
-# --- Fonction pour télécharger le PDF du jour via le flux RSS ---
-def download_latest_jorf_pdf():
-    RSS_URL = "https://www.legifrance.gouv.fr/rss/jorf.xml"
-    feed = feedparser.parse(RSS_URL)
-    latest_entry = feed.entries[0]
-
-    print("🔎 Récupération de la page HTML :", latest_entry.link)
-    response = requests.get(latest_entry.link)
-    if response.status_code == 200:
-        soup = BeautifulSoup(response.content, "html.parser")
-        pdf_link = None
-
-        for a_tag in soup.find_all("a", href=True):
-            if a_tag["href"].endswith(".pdf"):
-                pdf_link = a_tag["href"]
-                break
-
-        if pdf_link:
-            if not pdf_link.startswith("http"):
-                pdf_link = "https://www.legifrance.gouv.fr" + pdf_link
-            print("✅ Lien PDF trouvé :", pdf_link)
-
-            pdf_response = requests.get(pdf_link)
-            if pdf_response.status_code == 200:
-                with open("jorf_du_jour.pdf", "wb") as f:
-                    f.write(pdf_response.content)
-                print("✅ PDF téléchargé.")
-                return True
-            else:
-                print("❌ Échec téléchargement PDF :", pdf_response.status_code)
-                return False
-        else:
-            print("❌ Aucun lien PDF trouvé.")
-            return False
-    else:
-        print("❌ Échec de la récupération HTML :", response.status_code)
-        return False
-
-# --- Mini template HTML ---
+# Mini template HTML
 HTML_TEMPLATE = """
 <!doctype html>
 <html lang="fr">
   <head>
     <meta charset="utf-8">
-    <title>Dashboard JO</title>
+    <title>Dashboard JO - Import Manuel</title>
     <style>
       body { font-family: sans-serif; margin: 2em; }
       h1 { color: #333; }
@@ -105,9 +65,9 @@ HTML_TEMPLATE = """
     </style>
   </head>
   <body>
-    <h1>📰 Dashboard Journal Officiel</h1>
+    <h1>📰 Dashboard Journal Officiel - Import Manuel</h1>
     <form method="POST" action="/analyse">
-      <button type="submit">Analyser le JO du jour</button>
+      <button type="submit">Analyser le PDF importé</button>
     </form>
 
     {% if analysed %}
@@ -142,15 +102,17 @@ def index():
 
 @app.route("/analyse", methods=["POST"])
 def analyse():
-    if download_latest_jorf_pdf():
-        texte_jorf = extract_text_from_pdf("jorf_du_jour.pdf")
+    pdf_path = "jorf_importe.pdf"  # Nom du fichier PDF local (placé à la racine du projet)
+    if os.path.exists(pdf_path):
+        texte_jorf = extract_text_from_pdf(pdf_path)
         if not texte_jorf.strip():
             print("⚠️ Texte vide, fallback OCR…")
-            texte_jorf = ocr_pdf("jorf_du_jour.pdf")
+            texte_jorf = ocr_pdf(pdf_path)
         else:
             print("✅ Texte extrait sans OCR.")
         personnalites, themes_trouves, nominations = analyse_texte(texte_jorf)
     else:
+        print("❌ Aucun fichier PDF trouvé :", pdf_path)
         personnalites, themes_trouves, nominations = [], [], []
 
     return render_template_string(HTML_TEMPLATE,
